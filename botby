@@ -1,0 +1,113 @@
+import asyncio
+import json
+import os
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+
+TOKEN = "8703745590:AAGZGzkCYQwb9esi1OPZi-aoL0Df_7LQ_CI"
+
+# Список админов, которые могут загружать ДЗ
+ADMINS = ["SpecialAvocano", "Snm_Anna"]
+
+bot = Bot(token=TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
+
+FILE_PATH = "dz_base.json"
+
+# Функция загрузки ДЗ из файла-памяти
+def load_dz():
+    if os.path.exists(FILE_PATH):
+        with open(FILE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {
+        "Понедельник": "ДЗ нету",
+        "Вторник": "ДЗ нету",
+        "Среда": "ДЗ нету",
+        "Четверг": "ДЗ нету",
+        "Пятница": "ДЗ нету"
+    }
+
+# Функция сохранения ДЗ в файл-память
+def save_dz_to_file(data):
+    with open(FILE_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+dz_data = load_dz()
+
+class DZState(StatesGroup):
+    waiting_for_dz = State()
+
+def get_main_menu():
+    buttons = [
+        [InlineKeyboardButton(text="Узнать ДЗ", callback_data="view_dz")],
+        [InlineKeyboardButton(text="Загрузить ДЗ", callback_data="upload_dz")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_days_menu():
+    days = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница"]
+    buttons = [[InlineKeyboardButton(text=day, callback_data=f"day_{day}")] for day in days]
+    buttons.append([InlineKeyboardButton(text="⬅️ В меню", callback_data="to_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+@dp.message(F.text == "/start")
+async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("DZBOT By SpecialAvocano", reply_markup=get_main_menu())
+
+@dp.callback_query(F.data == "to_menu")
+async def to_menu(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("DZBOT By SpecialAvocano", reply_markup=get_main_menu())
+    await callback.answer()
+
+@dp.callback_query(F.data == "view_dz")
+async def view_dz(callback: CallbackQuery):
+    global dz_data
+    dz_data = load_dz()
+    text = "📅 **Текущее домашнее задание:**\n\n"
+    for day, text_dz in dz_data.items():
+        text += f"**{day}:** {text_dz}\n"
+    
+    back_btn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Назад в меню", callback_data="to_menu")]])
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=back_btn)
+    await callback.answer()
+
+@dp.callback_query(F.data == "upload_dz")
+async def upload_dz(callback: CallbackQuery):
+    user = callback.from_user.username
+    if user in ADMINS:
+        await callback.message.edit_text("Выбери день недели для добавления домашнего задания:", reply_markup=get_days_menu())
+    else:
+        back_btn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Главное меню", callback_data="to_menu")]])
+        await callback.message.edit_text("У вас нет прав для загрузки ДЗ!", reply_markup=back_btn)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("day_"))
+async def process_day_selection(callback: CallbackQuery, state: FSMContext):
+    selected_day = callback.data.split("_")[1]
+    await state.update_data(chosen_day=selected_day)
+    await callback.message.edit_text(f"Введите домашнее задание на день {selected_day}:")
+    await state.set_state(DZState.waiting_for_dz)
+    await callback.answer()
+
+@dp.message(DZState.waiting_for_dz)
+async def save_dz(message: Message, state: FSMContext):
+    user_data = await state.get_data()
+    day = user_data['chosen_day']
+    
+    dz_data[day] = message.text
+    save_dz_to_file(dz_data)
+    await state.clear()
+    
+    back_btn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="В меню", callback_data="to_menu")]])
+    await message.answer("ДЗ загружено!", reply_markup=back_btn)
+
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == '__main__':
+    asyncio.run(main())
